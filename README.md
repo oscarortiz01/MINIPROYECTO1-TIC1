@@ -15,5 +15,4 @@ En el siguiente video se muestra el funcionamiento completo de ambos proyectos, 
   https://youtu.be/NPn6FSDo4zg
 
 Integrantes:
-Oscar Ortiz Molina
-Joaquín Mardones Gallegos
+Oscar Ortiz Molina, Joaquín Mardones Gallegos
