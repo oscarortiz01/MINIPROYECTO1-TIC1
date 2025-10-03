@@ -7,187 +7,286 @@ Original file is located at
     https://colab.research.google.com/drive/1KyT4cu91erRKyj1OskHTZzVxDfqsDhHN
 """
 
-import random
-import threading
-import time
+# Se importan las bibliotecas necesarias para el funcionamiento del programa.
+import random  # Para elegir un Pokémon al azar de la lista.
+import threading  # Para ejecutar procesos en paralelo (el parpadeo del LED de vidas).
+import time  # Para introducir pausas y controlar tiempos.
 
-# --- BIBLIOTECAS MODERNAS ---
-from gpiozero import RGBLED, Button, TonalBuzzer
-import board
-import busio
-import adafruit_ads1x15.ads1115 as ADS
-from adafruit_ads1x15.analog_in import AnalogIn
+# --- BIBLIOTECAS MODERNAS PARA CONTROL DE HARDWARE ---
+# Estas bibliotecas facilitan la interacción con los componentes de hardware en la Raspberry Pi.
+from gpiozero import RGBLED, Button, TonalBuzzer  # Para controlar el LED RGB, el botón del joystick y el zumbador.
+import board  # Proporciona los nombres de los pines de la Raspberry Pi.
+import busio  # Para manejar la comunicación a través del bus I2C.
+import adafruit_ads1x15.ads1115 as ADS  # Driver para el conversor Analógico-Digital (ADC) ADS1115.
+from adafruit_ads1x15.analog_in import AnalogIn  # Clase para leer fácilmente una entrada analógica del ADC.
 
-# --- CONFIGURACIÓN ---
+# --- CONFIGURACIÓN DE PINES Y HARDWARE ---
+# Se inicializan todos los componentes de hardware que se van a utilizar.
+
+# Configura la comunicación I2C, que es el protocolo usado para hablar con el ADC.
 i2c = busio.I2C(board.SCL, board.SDA)
+# Crea una instancia del conversor ADC ADS1115.
 ads = ADS.ADS1115(i2c)
+# Configura el canal 0 (P0) del ADC como una entrada analógica para leer el eje X del joystick.
 chan_x = AnalogIn(ads, ADS.P0)
+
+# Configura el botón del joystick, conectado al pin GPIO 26.
+# pull_up=True significa que el pin está en estado ALTO por defecto y se va a BAJO al presionarlo.
 joy_button = Button(26, pull_up=True)
+
+# Configura el primer LED RGB (indicador de estado de vidas).
+# Se especifican los pines GPIO para cada color: Rojo, Verde y Azul.
 led1 = RGBLED(red=27, green=17, blue=22)
+# Configura el segundo LED RGB (indicador de parpadeo de "corazón").
 led2 = RGBLED(red=24, green=23, blue=25)
+# Configura el zumbador (buzzer), conectado al pin GPIO 16.
 buzzer = TonalBuzzer(16)
 
-# --- ESTADO COMPARTIDO ---
+# --- ESTADO COMPARTIDO ENTRE HILOS (THREADS) ---
+# Esta sección es crucial para que el hilo principal del juego y el hilo del parpadeo del LED
+# puedan comunicarse de forma segura.
+
+# Un diccionario para compartir el número de vidas actual y el máximo.
+# Se usa un diccionario para que los cambios dentro del hilo sean visibles en el hilo principal.
 vidas_info = {"vidas": 0, "max": 1}
+# Un "candado" (lock) para evitar que dos hilos intenten modificar la variable `vidas_info` al mismo tiempo,
+# lo que podría causar errores (condiciones de carrera).
 gpio_lock = threading.Lock()
 
 # --- MELODÍAS PERSONALIZADAS (CON NOTAS EN RANGO SEGURO) ---
+# Funciones para reproducir sonidos específicos en diferentes momentos del juego.
+
 def sonido_error_vida():
-    """Tono corto y seco para indicar un error."""
-    # CAMBIO FINAL: Usamos Do4 (261 Hz), una nota muy segura.
-    buzzer.play(261)
-    time.sleep(0.15)
-    buzzer.stop()
+    """Tono corto y seco para indicar que se ha perdido una vida."""
+    buzzer.play(261)  # Toca la nota Do4 (261 Hz).
+    time.sleep(0.15)  # Mantiene el sonido por 0.15 segundos.
+    buzzer.stop()     # Apaga el zumbador.
 
 def sonido_victoria():
-    """Melodía ascendente y alegre para la victoria."""
-    # (Esta melodía ya era segura)
-    notas_victoria = [261, 329, 392, 523] # Do, Mi, Sol, Do alto
+    """Melodía ascendente y alegre que suena al ganar la partida."""
+    notas_victoria = [261, 329, 392, 523] # Notas: Do, Mi, Sol, Do alto.
     for nota in notas_victoria:
         buzzer.play(nota)
         time.sleep(0.15)
         buzzer.stop()
-        time.sleep(0.05)
+        time.sleep(0.05) # Pequeña pausa entre notas.
 
 def sonido_derrota():
-    """Melodía descendente y triste para la derrota."""
-    # CAMBIO FINAL: Usamos notas seguras que descienden para dar la sensación de derrota.
-    buzzer.play(293) # Re4
+    """Melodía descendente y triste que suena al perder la partida."""
+    buzzer.play(293)  # Toca la nota Re4.
     time.sleep(0.4)
     buzzer.stop()
     time.sleep(0.1)
-    buzzer.play(261) # Do4
+    buzzer.play(261)  # Toca la nota Do4.
     time.sleep(0.8)
     buzzer.stop()
 
+# --- FUNCIONES DE CONTROL DE HARDWARE Y LÓGICA ---
+
 def actualizar_leds_estado(vidas, max_vidas):
-    # (Sin cambios)
+    """
+    Actualiza el color del LED1 según el número de vidas restantes.
+    También actualiza el diccionario compartido `vidas_info` de forma segura.
+    """
+    # Adquiere el candado para asegurar que solo este hilo modifique los datos compartidos.
     with gpio_lock:
+        # Actualiza la información de vidas que usará el hilo de parpadeo.
         vidas_info["vidas"] = vidas
-        vidas_info["max"] = max(1, max_vidas)
-        if vidas == max_vidas or vidas == max_vidas - 1:
-            led1.color = (0, 1, 0)
+        vidas_info["max"] = max(1, max_vidas) # Asegura que el máximo nunca sea cero.
+
+        # Cambia el color del LED1 según el porcentaje de vidas.
+        if vidas >= max_vidas - 1:
+            led1.color = (0, 1, 0)  # Verde: vidas llenas o casi llenas.
         elif vidas > 1:
-            led1.color = (1, 1, 0)
+            led1.color = (1, 1, 0)  # Amarillo: vidas a nivel medio.
         else:
-            led1.color = (1, 0, 0)
+            led1.color = (1, 0, 0)  # Rojo: una vida restante o menos.
 
 def blink_thread_func(stop_event, vidas_info_dict, lock):
-    # (Sin cambios)
-    MIN_PERIOD = 0.08
-    MAX_PERIOD = 1.00
+    """
+    Función que se ejecuta en un hilo separado. Hace parpadear el LED2.
+    La velocidad del parpadeo es proporcional a las vidas restantes (más rápido a menos vidas).
+    """
+    MIN_PERIOD = 0.08  # Periodo mínimo (parpadeo muy rápido).
+    MAX_PERIOD = 1.00  # Periodo máximo (parpadeo lento).
+
+    # Bucle que se ejecuta mientras no se indique que debe parar.
     while not stop_event.is_set():
+        # Adquiere el candado para leer de forma segura los datos compartidos.
         with lock:
             v = vidas_info_dict.get("vidas", 0)
             m = vidas_info_dict.get("max", 1)
+
+        # Si no quedan vidas, apaga el LED y espera un poco.
         if v <= 0:
             led2.off()
             time.sleep(0.1)
             continue
-        ratio = v / max(1, m)
+
+        # Calcula la velocidad de parpadeo.
+        ratio = v / max(1, m)  # Proporción de vidas restantes (de 0.0 a 1.0).
+        # El periodo es inversamente proporcional a las vidas (menos vidas -> ratio bajo -> periodo corto).
         periodo = MIN_PERIOD + (MAX_PERIOD - MIN_PERIOD) * ratio
-        led2.color = (1, 0, 0)
-        if stop_event.wait(periodo): break
-        led2.off()
-        if stop_event.wait(periodo): break
+
+        # Ciclo de parpadeo
+        led2.color = (1, 0, 0)  # Enciende el LED en rojo.
+        if stop_event.wait(periodo): break # Espera 'periodo' segundos, pero se interrumpe si el programa termina.
+        led2.off() # Apaga el LED.
+        if stop_event.wait(periodo): break # Espera de nuevo.
 
 def elegir_letra_con_joystick(letras_usadas):
-    # (Sin cambios)
+    """
+    Gestiona la selección de una letra usando el joystick y el botón.
+    Muestra la letra actual y permite navegar por el alfabeto.
+    """
     alfabeto = "abcdefghijklmnopqrstuvwxyz"
     indice_letra = 0
     letra_seleccionada = None
+
     print("\nUsa el joystick para elegir una letra (Izquierda/Derecha) y presiona para seleccionar.")
+
+    # Bucle hasta que se presione el botón para seleccionar una letra válida.
     while letra_seleccionada is None:
         letra_actual = alfabeto[indice_letra]
+        # \r mueve el cursor al inicio de la línea, end="" evita el salto de línea.
+        # Esto permite que la letra se actualice en el mismo lugar.
         print(f"\rLetra actual: {letra_actual.upper()}", end="")
+
+        # Lee el valor analógico del joystick en el eje X.
         x_val = chan_x.value
+
+        # Si se presiona el botón.
         if joy_button.is_pressed:
             letra_elegida = alfabeto[indice_letra]
             if letra_elegida in letras_usadas:
                 print(f"\n¡La letra '{letra_elegida.upper()}' ya fue usada! Elige otra.")
-                time.sleep(1)
+                time.sleep(1) # Pausa para que el usuario lea el mensaje.
             else:
                 letra_seleccionada = letra_elegida
                 print(f"\nHas seleccionado: {letra_seleccionada.upper()}")
-                time.sleep(0.5)
-            continue
+                time.sleep(0.5) # Pequeña pausa para confirmar la selección.
+            continue # Vuelve al inicio del bucle para reevaluar la condición.
+
+        # Si el joystick se mueve a la derecha (valor alto).
         if x_val > 25000:
-            indice_letra = (indice_letra + 1) % len(alfabeto)
-            time.sleep(0.2)
+            indice_letra = (indice_letra + 1) % len(alfabeto) # Avanza en el alfabeto (circular).
+            time.sleep(0.2) # Pausa para no cambiar de letra demasiado rápido.
+        # Si el joystick se mueve a la izquierda (valor bajo).
         elif x_val < 5000:
-            indice_letra = (indice_letra - 1 + len(alfabeto)) % len(alfabeto)
+            indice_letra = (indice_letra - 1 + len(alfabeto)) % len(alfabeto) # Retrocede (circular).
             time.sleep(0.2)
+
     return letra_seleccionada
 
 def leeyvalida(minimo, maximo, txt):
-    # (Sin cambios)
+    """
+    Pide al usuario un número por teclado y valida que sea un entero
+    dentro de un rango específico [minimo, maximo].
+    """
     while True:
-        try: n = int(input(txt))
-        except ValueError: print("Error: ingresa un número entero.")
+        try:
+            n = int(input(txt))
+        except ValueError:
+            print("Error: ingresa un número entero.")
         else:
-            if minimo <= n <= maximo: return n
-            print("Error, valor fuera de rango")
+            if minimo <= n <= maximo:
+                return n
+            print(f"Error, el valor debe estar entre {minimo} y {maximo}.")
 
-# Lista completa de Pokémon
+# --- DATOS DEL JUEGO ---
+# Lista completa de los Pokémon de primera generación.
 pokemones = [
     "Bulbasaur","Ivysaur","Venusaur","Charmander","Charmeleon","Charizard","Squirtle","Wartortle","Blastoise","Caterpie","Metapod","Butterfree","Weedle","Kakuna","Beedrill","Pidgey","Pidgeotto","Pidgeot","Rattata","Raticate","Spearow","Fearow","Ekans","Arbok","Pikachu","Raichu","Sandshrew","Sandslash","Nidoran","Nidorina","Nidoqueen","Nidorino","Nidoking","Clefairy","Clefable","Vulpix","Ninetales","Jigglypuff","Wigglytuff","Zubat","Golbat","Oddish","Gloom","Vileplume","Paras","Parasect","Venonat","Venomoth","Diglett","Dugtrio","Meowth","Persian","Psyduck","Golduck","Mankey","Primeape","Growlithe","Arcanine","Poliwag","Poliwhirl","Poliwrath","Abra","Kadabra","Alakazam","Machop","Machoke","Machamp","Bellsprout","Weepinbell","Victreebel","Tentool","Tentacruel","Geodude","Graveler","Golem","Ponyta","Rapidash","Slowpoke","Slowbro","Magnemite","Magneton","Farfetchd","Doduo","Dodrio","Seel","Dewgong","Grimer","Muk","Shellder","Cloyster","Gastly","Haunter","Gengar","Onix","Drowzee","Hypno","Krabby","Kingler","Voltorb","Electrode","Exeggcute","Exeggutor","Cubone","Marowak","Hitmonlee","Hitmonchan","Lickitung","Koffing","Weezing","Rhyhorn","Rhydon","Chansey","Tangela","Kangaskhan","Horsea","Seadra","Goldeen","Seaking","Staryu","Starmie","MrMime","Scyther","Jynx","Electabuzz","Magmar","Pinsir","Tauros","Magikarp","Gyarados","Lapras","Ditto","Eevee","Vaporeon","Jolteon","Flareon","Porygon","Omanyte","Omastar","Kabuto","Kabutops","Aerodactyl","Snorlax","Articuno","Zapdos","Moltres","Dratini","Dragonair","Dragonite","Mewtwo","Mew"
 ]
 
 def jugar():
-    # (Sin cambios)
+    """Función principal que contiene toda la lógica de una partida del juego del ahorcado."""
+    # Fase de configuración de la partida.
     while True:
         letras = leeyvalida(3, 10, "¿Con cuántas letras quieres jugar? (3-10): ")
+        # Filtra la lista de Pokémon para quedarse solo con los que tienen la longitud deseada.
         posibles = [p for p in pokemones if len(p) == letras]
-        if posibles: break
-        else: print("⚠️ No hay Pokémon con esa cantidad de letras. Intenta con otro número.")
+        if posibles:
+            break # Si se encontraron Pokémon, sale del bucle.
+        else:
+            print("⚠️ No hay Pokémon con esa cantidad de letras. Intenta con otro número.")
+
+    # Elige un Pokémon al azar de la lista filtrada y lo convierte a minúsculas.
     palabra = random.choice(posibles).lower()
-    oculta = ["_"] * len(palabra)
+    oculta = ["_"] * len(palabra) # Crea la palabra oculta con guiones.
+
+    # Pide el número de vidas.
     max_vidas = leeyvalida(1, 20, "Ingrese el número de vidas (1-20): ")
     vidas = max_vidas
-    actualizar_leds_estado(vidas, max_vidas)
-    print(f"¡A jugar! El Pokémon tiene {len(palabra)} letras.")
-    print(" ".join(oculta))
-    usadas = set()
 
+    # Inicializa los LEDs con el estado actual de las vidas.
+    actualizar_leds_estado(vidas, max_vidas)
+
+    print(f"¡A jugar! El Pokémon tiene {len(palabra)} letras.")
+    print(" ".join(oculta)) # Muestra la palabra oculta inicial (ej: _ _ _ _).
+
+    usadas = set() # Un conjunto para guardar las letras ya usadas y evitar repeticiones.
+
+    # Bucle principal del juego: continúa mientras queden vidas Y queden letras por adivinar.
     while vidas > 0 and "_" in oculta:
         letra = elegir_letra_con_joystick(usadas)
-        usadas.add(letra)
+        usadas.add(letra) # Añade la nueva letra al conjunto de usadas.
+
+        # Comprueba si la letra está en la palabra.
         if letra in palabra:
+            # Si está, reemplaza los guiones bajos correspondientes.
             for i, c in enumerate(palabra):
-                if c == letra: oculta[i] = c
+                if c == letra:
+                    oculta[i] = c
             print("¡Correcto!")
         else:
+            # Si no está, resta una vida.
             vidas -= 1
             print(f"Letra incorrecta. Te quedan {vidas} vidas.")
-            sonido_error_vida()
-            actualizar_leds_estado(vidas, max_vidas)
+            sonido_error_vida() # Reproduce el sonido de error.
+            actualizar_leds_estado(vidas, max_vidas) # Actualiza los LEDs.
+
+        # Muestra el estado actual de la palabra y las letras usadas.
         print(" ".join(oculta))
         print("Letras usadas:", ", ".join(sorted(usadas)))
 
+    # Al salir del bucle, comprueba la condición de victoria o derrota.
     if "_" not in oculta:
         print(f"🎉 ¡Ganaste! El Pokémon era: {palabra.capitalize()}")
         sonido_victoria()
     else:
         print(f"❌ Te quedaste sin vidas. El Pokémon era: {palabra.capitalize()}")
         sonido_derrota()
-    time.sleep(3)
 
-# --- BUCLE PRINCIPAL ---
+    time.sleep(3) # Pausa de 3 segundos antes de continuar.
+
+# --- BUCLE PRINCIPAL DE EJECUCIÓN ---
+
+# Crea un "evento" que servirá como señal para detener el hilo de parpadeo de forma limpia.
 stop_event = threading.Event()
+# Crea el hilo (thread) que ejecutará la función `blink_thread_func`.
+# Se le pasan los argumentos necesarios: el evento de parada, el diccionario de vidas y el candado.
+# daemon=True significa que el hilo se detendrá automáticamente si el programa principal termina.
 blink_thread = threading.Thread(target=blink_thread_func, args=(stop_event, vidas_info, gpio_lock), daemon=True)
+# Inicia la ejecución del hilo. A partir de aquí, `blink_thread_func` corre en paralelo al código principal.
 blink_thread.start()
+
 try:
+    # Bucle que permite jugar múltiples partidas.
     while True:
-        jugar()
+        jugar() # Llama a la función principal del juego.
         seguir = input("¿Quieres seguir jugando? (s/n): ").lower()
         if seguir != "s":
             print("Gracias por jugar, hasta la próxima!")
             break
 except KeyboardInterrupt:
+    # Esto se ejecuta si el usuario presiona Ctrl+C para salir del programa.
     print("\nInterrumpido por usuario.")
 finally:
-    stop_event.set()
-    led1.off()
-    led2.off()
-    buzzer.stop()
+    # Este bloque se ejecuta SIEMPRE al final, ya sea que el programa termine
+    # normalmente o por una interrupción. Es ideal para la limpieza de recursos.
     print("Limpiando y saliendo.")
+    stop_event.set() # Envía la señal al hilo de parpadeo para que termine su bucle.
+    led1.off()       # Apaga ambos LEDs.
+    led2.off()
+    buzzer.stop()    # Se asegura de que el zumbador no se quede sonando.
