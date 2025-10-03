@@ -1,6 +1,7 @@
 # MiniProyecto 1: Ahorcado Interactivo y RetroPie
 
 Este repositorio contiene todos los entregables para el MiniProyecto 1
+
 Contenido del Repositorio
 
 /Informe_MiniProyecto1.pdf: El informe completo del proyecto en formato PDF.
